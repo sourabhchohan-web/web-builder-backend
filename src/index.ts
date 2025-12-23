@@ -29,35 +29,56 @@ app.use('/api/forms', formRoutes);
 app.use('/api/ai', aiRoutes);
 app.use('/api/auth', authRoutes);
 
-async function startServer() {
-    const server = new ApolloServer({
-        typeDefs: themeTypeDefs,
-        resolvers: themeResolvers,
-        context: ({ req }) => ({
-            user: (req as any).user, // Auth middleware would set this
-            tenant: (req as any).tenant
-        })
-    });
 
-    await server.start();
-    server.applyMiddleware({ app: app as any });
+// Database Connection
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/webbuilder';
+let isConnected = false;
 
-    // Database Connection
-    const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://localhost:27017/webbuilder';
-
-    mongoose.connect(MONGODB_URI)
-        .then(() => {
-            console.log('Connected to MongoDB');
-            app.listen(PORT, () => {
-                console.log(`Backend Server running on port ${PORT}`);
-                console.log(`GraphQL endpoint available at http://localhost:${PORT}${server.graphqlPath}`);
-            });
-        })
-        .catch(err => {
-            console.error('MongoDB connection error:', err);
-        });
+async function connectDB() {
+    if (isConnected) return;
+    try {
+        await mongoose.connect(MONGODB_URI);
+        isConnected = true;
+        console.log('Connected to MongoDB');
+    } catch (err) {
+        console.error('MongoDB connection error:', err);
+    }
 }
 
-startServer();
+// Apollo Server Setup
+const server = new ApolloServer({
+    typeDefs: themeTypeDefs,
+    resolvers: themeResolvers,
+    context: ({ req }) => ({
+        user: (req as any).user,
+        tenant: (req as any).tenant
+    })
+});
 
-export default app;
+let isServerStarted = false;
+
+async function startServer() {
+    if (!isServerStarted) {
+        await server.start();
+        server.applyMiddleware({ app: app as any });
+        await connectDB();
+        isServerStarted = true;
+    }
+}
+
+// Local Development
+if (process.env.NODE_ENV !== 'production' && !process.env.VERCEL) {
+    (async () => {
+        await startServer();
+        app.listen(PORT, () => {
+            console.log(`Backend Server running on port ${PORT}`);
+            console.log(`GraphQL endpoint available at http://localhost:${PORT}${server.graphqlPath}`);
+        });
+    })();
+}
+
+// Vercel Handler
+export default async (req: any, res: any) => {
+    await startServer();
+    app(req, res);
+};
